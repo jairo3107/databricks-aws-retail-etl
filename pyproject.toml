@@ -1,0 +1,25 @@
+# Entorno de desarrollo y CI. No se empaqueta ni se instala en Databricks: allí
+# el código llega por el bundle y el runtime aporta PySpark.
+[project]
+name = "databricks-aws-retail-etl"
+version = "0.1.0"
+description = "Pipeline Medallion S3 -> Unity Catalog con Declarative Automation Bundles"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pyspark==3.5.3",   # pruebas locales de transformaciones (requiere Java 17)
+    "pytest==8.3.3",
+    "pyflakes==3.2.0",
+    "pyyaml==6.0.2",
+    "jsonschema==4.23.0",
+]
+
+[tool.uv]
+package = false            # no es un paquete instalable
+default-groups = ["dev"]   # `uv sync` / `uv run` instalan el grupo dev
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

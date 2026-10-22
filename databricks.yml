@@ -1,0 +1,92 @@
+# Declarative Automation Bundle (Databricks Asset Bundle) del proyecto.
+#
+# Sin host, credenciales ni principal lector: los valores no confirmados o
+# sensibles no tienen default y deben pasarse con --var o BUNDLE_VAR_<nombre>. La
+# autenticación sale del entorno (DATABRICKS_HOST + un único método:
+# DATABRICKS_CLIENT_ID/SECRET o DATABRICKS_TOKEN) o de un perfil local.
+# Ver docs/configuracion_pendiente.md.
+#
+# Free Edition: hay UN solo workspace. dev y prod son una separación lógica
+# (esquemas y rutas distintos) dentro del mismo workspace y del mismo
+# catálogo, no dos workspaces físicos. RAW es compartido: los notebooks solo lo
+# leen, pero la External Location (raíz del bucket) permite leer, escribir y
+# borrar, así que no hay ninguna restricción técnica de solo lectura sobre raw/.
+
+bundle:
+  name: databricks-aws-retail-etl
+
+include:
+  - resources/*.yml
+
+sync:
+  exclude:
+    - datasets/**
+    - tests/**
+    - evidencias/**
+    - dashboard/**
+    - certificaciones/**
+    - scripts/**
+
+variables:
+  # --- Confirmado ---
+  catalog:
+    description: Catálogo de Unity Catalog existente (el job no lo crea).
+    default: workspace
+
+  # --- Obligatorio y sin default a propósito ---
+  grant_principal:
+    description: >-
+      Principal de UC que recibe USE CATALOG, USE SCHEMA y SELECT sobre el Gold del entorno.
+      Recomendado: retail_etl_readers (grupo de cuenta, origen Account confirmado). Alternativas: el application ID
+      de un service principal, o el correo de un usuario. No se aceptan admins, users ni grupos locales del
+      workspace. Nunca se escribe aquí: se pasa con --var o BUNDLE_VAR_grant_principal.
+
+  # --- RAW compartido por dev y prod (bucket confirmado; prefijo raw/ por diseño) ---
+  raw_root:
+    description: Prefijo RAW donde están los CSV. Se lee directamente desde S3.
+    default: s3://databricks-retail-etl-2026-smart/raw
+  raw_path_ecommerce:
+    default: ecommerce/Ecommerce_Sales_Prediction_Dataset.csv
+  raw_path_automobiles:
+    default: automobiles/Automobile_data.csv
+
+  # --- Aislamiento por entorno: los valores se fijan en cada target ---
+  job_name:
+    description: Nombre visible del job.
+  lakehouse_root:
+    description: Raíz de las tablas Delta externas del entorno (termina en /dev o /prod).
+  schema_bronze:
+    description: Esquema Bronze del entorno.
+  schema_silver:
+    description: Esquema Silver del entorno.
+  schema_gold:
+    description: Esquema Gold del entorno.
+
+  semantica_discount:
+    description: desconocida | porcentaje | importe. Cambiar solo tras verificar la unidad de Discount.
+    default: desconocida
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      job_name: WF_DEV_ETL_RETAIL
+      lakehouse_root: s3://databricks-retail-etl-2026-smart/lakehouse/dev
+      schema_bronze: dev_bronze
+      schema_silver: dev_silver
+      schema_gold: dev_gold
+
+  prod:
+    mode: production
+    workspace:
+      # Bajo el home de la identidad que despliega. El modo production exige un root_path explícito.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      job_name: WF_PROD_ETL_RETAIL
+      lakehouse_root: s3://databricks-retail-etl-2026-smart/lakehouse/prod
+      schema_bronze: bronze
+      schema_silver: silver
+      schema_gold: gold
+    # Sin run_as: el job se ejecuta como la identidad que despliega (service principal o
+    # usuario del PAT). Esa identidad necesita los permisos de PrepAmb/prerrequisitos_admin.sql.

@@ -1,0 +1,42 @@
+# --- Credenciales y configuración local (NUNCA versionar) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.databrickscfg
+.aws/
+credentials
+*.tfvars
+secrets*.json
+
+# --- Databricks Asset / Automation Bundles ---
+.databricks/
+.bundle/
+
+# --- Python (entorno de uv: .venv; se versionan pyproject.toml, uv.lock y .python-version) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# --- Salidas locales ---
+scratch/
+*.log
+perfil_datasets.json
+bundle_schema.json
+
+# --- Configuración local de herramientas (puede contener rutas o identidades) ---
+.claude/settings.local.json
+
+# --- Editores / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

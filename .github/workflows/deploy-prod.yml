@@ -1,0 +1,100 @@
+# Despliegue y ejecución en producción con Declarative Automation Bundles.
+# Solo manual (workflow_dispatch): no se ejecuta con push ni con schedule.
+#
+# GitHub → Settings → Environments → "prod":
+#   Secret:    DATABRICKS_HOST
+#   Secrets de autenticación, UN solo método (el CLI rechaza "more than one authorization method"):
+#     a) OAuth M2M (preferido): DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET
+#     b) Alternativa si el workspace no permite crear secretos OAuth de service principal: DATABRICKS_TOKEN (PAT)
+#     Si existen ambos, se usa OAuth M2M y el PAT se ignora.
+#   Variable:  DATABRICKS_GRANT_PRINCIPAL (obligatoria): recomendado retail_etl_readers (grupo de cuenta).
+#              Alternativas: application ID de un SP o correo de un usuario. Nunca admins/users ni grupos locales.
+#   El catálogo (workspace) viene de databricks.yml, versionado y revisable; no se pasa por variable.
+# Repo público: los logs de Actions son públicos. Por eso el principal y la identidad que despliega
+# se enmascaran antes de cualquier comando que pueda imprimirlos (bundle validate muestra el usuario).
+# Se recomienda añadir "Required reviewers" al environment.
+name: Deploy PROD (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      accion:
+        description: Qué hacer
+        type: choice
+        options: [validate, deploy, deploy-and-run]
+        default: validate
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash   # bash -eo pipefail: cualquier fallo corta el step y los siguientes
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 120
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+      # El PAT solo se expone si no hay OAuth M2M. Una variable vacía no cuenta como método de autenticación.
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_CLIENT_ID == '' && secrets.DATABRICKS_TOKEN || '' }}
+      BUNDLE_VAR_grant_principal: ${{ vars.DATABRICKS_GRANT_PRINCIPAL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: databricks/setup-cli@9230f12203ef173d0b901846f62a55ce997efef7 # v1.19.0
+        with:
+          version: 1.19.0
+
+      - name: Comprobar configuración
+        run: |
+          [ -n "$BUNDLE_VAR_grant_principal" ] && echo "::add-mask::$BUNDLE_VAR_grant_principal"
+          faltan=0
+          for v in DATABRICKS_HOST BUNDLE_VAR_grant_principal; do
+            if [ -z "${!v}" ]; then echo "::error::Falta $v en el environment prod"; faltan=1; fi
+          done
+          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+            echo "Autenticación: OAuth M2M (service principal)"
+          elif [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "Autenticación: PAT (alternativa)"
+          else
+            echo "::error::Sin credenciales: define DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET, o DATABRICKS_TOKEN"
+            faltan=1
+          fi
+          case "$(echo "$BUNDLE_VAR_grant_principal" | tr '[:upper:]' '[:lower:]')" in
+            admins|users|"account users"|*-clone-*-utc|*" (workspace)")
+              echo "::error::DATABRICKS_GRANT_PRINCIPAL no puede ser un grupo de sistema ni un grupo local del workspace"
+              faltan=1;;
+          esac
+          databricks --version
+          exit $faltan
+
+      # Comprueba la autenticación y enmascara el usuario o SP que despliega (aparece en root_path).
+      - name: Identidad (enmascarada)
+        run: |
+          me=$(databricks current-user me --output json)
+          for campo in userName displayName; do
+            v=$(jq -r ".$campo // empty" <<<"$me"); [ -n "$v" ] && echo "::add-mask::$v"
+          done
+          echo "Autenticación correcta"
+
+      - name: Validate
+        run: databricks bundle validate -t prod
+
+      # Los steps siguientes solo se ejecutan si Validate termina bien (comportamiento por defecto).
+      - name: Deploy
+        if: inputs.accion != 'validate'
+        run: databricks bundle deploy -t prod
+
+      # bundle run espera a que termine el job y devuelve error si alguna tarea falla.
+      - name: Run WF_PROD_ETL_RETAIL
+        if: inputs.accion == 'deploy-and-run'
+        run: databricks bundle run -t prod wf_prod_etl_retail

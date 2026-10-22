@@ -1,0 +1,5 @@
+# Los CSV de datasets/ se versionan byte a byte (CRLF incluido) para conservar sus SHA-256
+# documentados en datasets/README.md: sin normalizar finales de línea (-text) y sin
+# comprobación de espacios (-whitespace), que trataría cada CR final como error en
+# `git diff --check` del CI.
+datasets/**/*.csv -text -whitespace

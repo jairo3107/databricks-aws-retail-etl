@@ -1,0 +1,59 @@
+# Validación local, sin secretos y sin contacto con Databricks ni AWS.
+# Separado del despliegue (deploy-prod.yml), que solo se lanza a mano.
+name: CI (validación local)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Python 3.12 (.python-version) y dependencias exactas de uv.lock.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.29"
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Solo para generar el JSON Schema del bundle (offline, sin credenciales).
+      - uses: databricks/setup-cli@9230f12203ef173d0b901846f62a55ce997efef7 # v1.19.0
+        with:
+          version: 1.19.0
+
+      - name: Dependencias de desarrollo (uv.lock)
+        run: uv sync --locked
+
+      - name: Espacios y finales de línea
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+
+      - name: Sintaxis y nombres no definidos
+        env:
+          PYFLAKES_BUILTINS: spark,dbutils,display
+        run: |
+          uv run python -m py_compile proceso/*.py reversion/*.py scripts/*.py tests/*.py
+          uv run python -m pyflakes proceso reversion scripts tests
+
+      # Incluye YAML estricto, consistencia del bundle, privacidad, credenciales y enlaces Markdown.
+      - name: Bundle, job, workflows, estructura, privacidad, credenciales y enlaces
+        run: |
+          databricks bundle schema > "$RUNNER_TEMP/bundle_schema.json"
+          uv run python scripts/validar_repo.py --schema "$RUNNER_TEMP/bundle_schema.json"
+
+      - name: Pruebas PySpark sobre los CSV locales
+        run: uv run pytest -q

@@ -1,0 +1,66 @@
+# Job ETL (uno por target: WF_DEV_ETL_RETAIL / WF_PROD_ETL_RETAIL). Ejecuta solo
+# notebooks de proceso/. Las rutas de notebook son relativas a este archivo.
+#
+# Cómputo: las tareas no declaran cluster, así que usan serverless jobs (el único
+# cómputo de Free Edition). Sin schedule: solo bajo demanda (GitHub Actions o la UI).
+
+resources:
+  jobs:
+    wf_prod_etl_retail:
+      name: ${var.job_name}
+      description: "Medallion S3 → Bronze → Silver → Gold para E-commerce y Automobiles (fuentes independientes)."
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        proyecto: databricks-aws-retail-etl
+        entorno: ${bundle.target}
+
+      # Los parámetros del job llegan a TODAS las tareas como widgets. Los notebooks
+      # los leen con dbutils.widgets.get() mediante comun.leer_parametros(); las
+      # variables del bundle no existen dentro de Python.
+      parameters:
+        - { name: entorno,              default: "${bundle.target}" }
+        - { name: catalogo,             default: "${var.catalog}" }
+        - { name: esquema_bronze,       default: "${var.schema_bronze}" }
+        - { name: esquema_silver,       default: "${var.schema_silver}" }
+        - { name: esquema_gold,         default: "${var.schema_gold}" }
+        - { name: raw_root,             default: "${var.raw_root}" }
+        - { name: lakehouse_root,       default: "${var.lakehouse_root}" }
+        - { name: raw_path_ecommerce,   default: "${var.raw_path_ecommerce}" }
+        - { name: raw_path_automobiles, default: "${var.raw_path_automobiles}" }
+        - { name: semantica_discount,   default: "${var.semantica_discount}" }
+        - { name: grant_principal,      default: "${var.grant_principal}" }
+        # Referencia dinámica de Jobs ({{...}}), no del bundle (${...}): se resuelve al ejecutar.
+        - { name: ejecucion_id,         default: "{{job.run_id}}" }
+
+      tasks:
+        - task_key: PrepAmb
+          notebook_task: { notebook_path: ../proceso/00_prep_amb.py }
+
+        # Extract: las dos ingestas son independientes y corren en paralelo.
+        - task_key: Extract_ecommerce
+          depends_on: [{ task_key: PrepAmb }]
+          notebook_task: { notebook_path: ../proceso/01_extract_ecommerce.py }
+
+        - task_key: Extract_automobiles
+          depends_on: [{ task_key: PrepAmb }]
+          notebook_task: { notebook_path: ../proceso/01_extract_automobiles.py }
+
+        - task_key: Transform_ecommerce
+          depends_on: [{ task_key: Extract_ecommerce }]
+          notebook_task: { notebook_path: ../proceso/02_transform_ecommerce.py }
+
+        - task_key: Transform_automobiles
+          depends_on: [{ task_key: Extract_automobiles }]
+          notebook_task: { notebook_path: ../proceso/02_transform_automobiles.py }
+
+        # Load espera a las dos Silver.
+        - task_key: Load
+          depends_on:
+            - { task_key: Transform_ecommerce }
+            - { task_key: Transform_automobiles }
+          notebook_task: { notebook_path: ../proceso/03_load_gold.py }
+
+        - task_key: Grants
+          depends_on: [{ task_key: Load }]
+          notebook_task: { notebook_path: ../proceso/04_grants.py }
